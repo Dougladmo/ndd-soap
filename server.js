@@ -3,12 +3,16 @@ const express = require("express");
 const cors = require("cors");
 
 const countersRoute = require("./routes/getCounters");
+const getEnterprisesRoute = require("./routes/getEnterprises");
+const getSites = require("./routes/getSites")
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.use("/counters", countersRoute);
+app.use("/enterprises", getEnterprisesRoute);
+app.use("/sites", getSites);
 
 const PORT = 3000;
 app.listen(PORT, () => {

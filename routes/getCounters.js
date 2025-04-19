@@ -3,7 +3,6 @@ const router = express.Router();
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
 
-
 const dealerName = process.env.DEALER_NAME;
 const dealerUserEmail = process.env.DEALER_USER_EMAIL;
 const dealerUserPassword = process.env.DEALER_USER_PASS;
@@ -14,12 +13,6 @@ function parseCounterValue(str) {
   if (!str) return 0;
   const num = parseInt(str, 10);
   return isNaN(num) ? 0 : num;
-}
-
-function formatDate(dateStr) {
-  const [date] = dateStr.split(' ');
-  const [year, month, day] = date.split('-');
-  return `${day}/${month}/${year}`;
 }
 
 async function getPlainCountersData(params) {
@@ -61,9 +54,9 @@ async function getPlainCountersData(params) {
     );
 
     const parsedXml = await parseStringPromise(response.data);
-
-    const resultString =
-      parsedXml['soap:Envelope']['soap:Body'][0]['GetPlainCountersDataResponse'][0]['GetPlainCountersDataResult'][0];
+    const resultString = parsedXml['soap:Envelope']['soap:Body'][0]
+      ['GetPlainCountersDataResponse'][0]
+      ['GetPlainCountersDataResult'][0];
 
     let result;
     try {
@@ -74,6 +67,7 @@ async function getPlainCountersData(params) {
 
     if (!Array.isArray(result)) return { message: 'Nenhum dado retornado' };
 
+    // Agrupa contadores por impressora
     const printers = {};
     result.forEach(item => {
       const key = `${item.SerialNumber}||${item.PrinterDeviceName}`;
@@ -82,36 +76,63 @@ async function getPlainCountersData(params) {
           PrinterDeviceName: item.PrinterDeviceName,
           SerialNumber: item.SerialNumber,
           General: null,
-          Duplex: null
+          Duplex: null,
+          Simplex: null
         };
       }
-      if (item.CounterTypeName === 'General') {
-        printers[key].General = item;
-      } else if (item.CounterTypeName === 'Duplex') {
-        printers[key].Duplex = item;
+      switch (item.CounterTypeName) {
+        case 'General':
+          printers[key].General = item;
+          break;
+        case 'Duplex':
+          printers[key].Duplex = item;
+          break;
+        case 'Simplex':
+          printers[key].Simplex = item;
+          break;
       }
     });
 
+    // Calcula uso e consumo
     return Object.values(printers).map(printer => {
-      const generalInicial = printer.General ? parseCounterValue(printer.General.FirstCounterTotal) : 0;
-      const generalFinal = printer.General ? parseCounterValue(printer.General.LatestCounterTotal) : 0;
-      const duplexInicial = printer.Duplex ? parseCounterValue(printer.Duplex.FirstCounterTotal) : 0;
-      const duplexFinal = printer.Duplex ? parseCounterValue(printer.Duplex.LatestCounterTotal) : 0;
+      const gi = printer.General ? parseCounterValue(printer.General.FirstCounterTotal) : 0;
+      const gf = printer.General ? parseCounterValue(printer.General.LatestCounterTotal) : 0;
+      const di = printer.Duplex ? parseCounterValue(printer.Duplex.FirstCounterTotal) : 0;
+      const df = printer.Duplex ? parseCounterValue(printer.Duplex.LatestCounterTotal) : 0;
+      const si = printer.Simplex ? parseCounterValue(printer.Simplex.FirstCounterTotal) : null;
+      const sf = printer.Simplex ? parseCounterValue(printer.Simplex.LatestCounterTotal) : null;
 
-      const generalUsage = generalFinal - generalInicial;
-      const duplexUsage = duplexFinal - duplexInicial;
-      const simplexUsage = generalUsage - duplexUsage;
-      const paperConsumption = simplexUsage + (duplexUsage / 2);
+      let generalUsage = gf - gi;
+      let duplexUsage  = df - di;
+      let simplexUsage;
+
+      if (si !== null && sf !== null) {
+        simplexUsage = sf - si;
+      } else {
+        simplexUsage = generalUsage - duplexUsage;
+      }
+
+      // Sanity checks
+      if (duplexUsage > generalUsage) {
+        duplexUsage = generalUsage;
+        simplexUsage = 0;
+      }
+      generalUsage = Math.max(0, generalUsage);
+      duplexUsage  = Math.max(0, duplexUsage);
+      simplexUsage = Math.max(0, simplexUsage);
+
+      const paperConsumption = simplexUsage + Math.floor(duplexUsage / 2);
 
       return {
         PrinterDeviceName: printer.PrinterDeviceName,
-        SerialNumber: printer.SerialNumber,
-        GeneralUsage: generalUsage,
-        DuplexUsage: duplexUsage,
-        SimplexUsage: simplexUsage,
+        SerialNumber:     printer.SerialNumber,
+        GeneralUsage:     generalUsage,
+        DuplexUsage:      duplexUsage,
+        SimplexUsage:     simplexUsage,
         PaperConsumption: paperConsumption
       };
     });
+
   } catch (error) {
     console.error('Erro ao consultar os counters:', error.message);
     return { error: error.message };
